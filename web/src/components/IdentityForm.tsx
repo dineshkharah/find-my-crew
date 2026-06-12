@@ -31,6 +31,7 @@ const MAX_NAME_LENGTH = 14;
 type Props = {
   submitLabel: string;
   onSubmit: (identity: Identity) => void;
+  busy?: boolean;
 };
 
 const emptySubscribe = () => () => {};
@@ -46,7 +47,7 @@ export default function IdentityForm(props: Props) {
   return <IdentityFormFields {...props} />;
 }
 
-function IdentityFormFields({ submitLabel, onSubmit }: Props) {
+function IdentityFormFields({ submitLabel, onSubmit, busy }: Props) {
   const [saved] = useState(loadIdentity);
   const [name, setName] = useState(saved?.name ?? "");
   const [emoji, setEmoji] = useState(saved?.emoji ?? "");
@@ -57,6 +58,7 @@ function IdentityFormFields({ submitLabel, onSubmit }: Props) {
 
   function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
+    if (busy) return;
     if (!ready) {
       setShowHint(true);
       return;
@@ -107,7 +109,8 @@ function IdentityFormFields({ submitLabel, onSubmit }: Props) {
       )}
       <button
         type="submit"
-        className="flex h-14 items-center justify-center rounded-full bg-foreground text-lg font-semibold text-background transition-opacity hover:opacity-85"
+        disabled={busy}
+        className="flex h-14 items-center justify-center rounded-full bg-foreground text-lg font-semibold text-background transition-opacity hover:opacity-85 disabled:opacity-50"
       >
         {submitLabel}
       </button>

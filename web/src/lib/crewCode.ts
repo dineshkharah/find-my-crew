@@ -23,9 +23,12 @@ export function generateCrewCode(): string {
   ).join("");
 }
 
+const ALLOWED = new RegExp(`[^${CODE_LETTERS}${CODE_DIGITS}]`, "g");
+
 export function sanitizeCodeInput(raw: string): string {
-  return raw
-    .toUpperCase()
-    .replace(/[^A-Z0-9]/g, "")
-    .slice(0, CODE_LENGTH);
+  return raw.toUpperCase().replace(ALLOWED, "").slice(0, CODE_LENGTH);
+}
+
+export function hasConfusableChars(raw: string): boolean {
+  return /[01ILO]/.test(raw.toUpperCase());
 }
