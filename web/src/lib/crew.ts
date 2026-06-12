@@ -2,13 +2,23 @@ import { getSocket } from "./socket";
 import type { Identity } from "./identity";
 import type { CrewSession } from "./session";
 
+export type MemberPosition = {
+  lat: number;
+  lng: number;
+  accuracy: number | null;
+  at: number;
+};
+
 export type Member = {
   id: string;
   name: string;
   emoji: string;
   online: boolean;
   lastSeenAt: number | null;
+  position: MemberPosition | null;
 };
+
+export type PositionEvent = MemberPosition & { memberId: string };
 
 export class CrewError extends Error {
   constructor(public reason: string) {
