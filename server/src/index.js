@@ -33,6 +33,7 @@ function membersPayload(crew) {
     emoji: member.emoji,
     online: member.online,
     lastSeenAt: member.lastSeenAt,
+    position: member.position,
   }));
 }
 
@@ -90,6 +91,7 @@ function addMember(crew, socket, identity) {
     emoji: identity.emoji,
     online: true,
     lastSeenAt: null,
+    position: null,
   };
   crew.members.set(member.id, member);
   attach(socket, crew, member);
@@ -165,6 +167,30 @@ io.on("connection", (socket) => {
     attach(socket, crew, member);
     ack({ ok: true, code, members: membersPayload(crew) });
     broadcastMembers(crew);
+  });
+
+  socket.on("position:update", (payload) => {
+    const crew = crews.get(socket.data.crewCode);
+    const member = crew?.members.get(socket.data.memberId);
+    if (!crew || !member) return;
+
+    const lat = Number(payload?.lat);
+    const lng = Number(payload?.lng);
+    if (!Number.isFinite(lat) || lat < -90 || lat > 90) return;
+    if (!Number.isFinite(lng) || lng < -180 || lng > 180) return;
+    const rawAccuracy = Number(payload?.accuracy);
+    const accuracy =
+      Number.isFinite(rawAccuracy) && rawAccuracy >= 0
+        ? Math.round(rawAccuracy)
+        : null;
+
+    member.position = { lat, lng, accuracy, at: Date.now() };
+    socket
+      .to(crew.code)
+      .volatile.emit("crew:position", {
+        memberId: member.id,
+        ...member.position,
+      });
   });
 
   socket.on("disconnect", () => {

@@ -1,9 +1,12 @@
 import { spawn } from "node:child_process";
 import { io } from "socket.io-client";
 
+const PORT = 4123;
+
 const server = spawn(process.execPath, ["src/index.js"], {
   cwd: "c:/cc/find-my-crew/server",
   stdio: ["ignore", "pipe", "inherit"],
+  env: { ...process.env, PORT: String(PORT) },
 });
 await new Promise((resolve, reject) => {
   server.stdout.on("data", (d) => {
@@ -12,7 +15,7 @@ await new Promise((resolve, reject) => {
   setTimeout(() => reject(new Error("server did not start")), 5000);
 });
 
-const URL = "http://localhost:4000";
+const URL = `http://localhost:${PORT}`;
 const connect = () =>
   new Promise((resolve) => {
     const s = io(URL, { transports: ["websocket"] });
@@ -77,12 +80,39 @@ check(
   rejoined.ok && rejoined.members.find((m) => m.id === joined.memberId)?.online === true,
 );
 
+const aSawPosition = new Promise((r) => a.once("crew:position", r));
+b2.emit("position:update", { lat: 18.5204, lng: 73.8567, accuracy: 12 });
+const position = await aSawPosition;
+check(
+  "position update reaches the crew",
+  position.memberId === joined.memberId &&
+    position.lat === 18.5204 &&
+    position.lng === 73.8567 &&
+    position.accuracy === 12 &&
+    typeof position.at === "number",
+);
+
+const invalidOutcome = await new Promise((resolve) => {
+  const onPosition = () => resolve("broadcast");
+  a.once("crew:position", onPosition);
+  b2.emit("position:update", { lat: 999, lng: 73.8567 });
+  setTimeout(() => {
+    a.off("crew:position", onPosition);
+    resolve("ignored");
+  }, 400);
+});
+check("invalid position is ignored", invalidOutcome === "ignored");
+
 const extras = [];
 for (let i = 0; i < 8; i++) {
   const s = await connect();
   extras.push(s);
   const res = await call(s, "crew:join", { code, name: `Friend${i}`, emoji: "🐸" });
   check(`member ${i + 3} of 10 can join`, res.ok === true);
+  if (i === 0) {
+    const seen = res.members.find((m) => m.id === joined.memberId);
+    check("join snapshot includes stored positions", seen?.position?.lat === 18.5204);
+  }
 }
 const eleventh = await connect();
 const overflow = await call(eleventh, "crew:join", { code, name: "Latecomer", emoji: "🦀" });
