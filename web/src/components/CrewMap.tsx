@@ -154,12 +154,12 @@ export default function CrewMap({ members, meId, ownPosition, now }: Props) {
 
     if (!fittedRef.current && points.length > 0) {
       fittedRef.current = true;
-      if (me) {
-        map.setView([me.lat, me.lng], 16);
+      if (points.length === 1) {
+        map.setView([points[0].lat, points[0].lng], 18);
       } else {
         map.fitBounds(
           L.latLngBounds(points.map((point) => [point.lat, point.lng])),
-          { padding: [40, 40], maxZoom: 17 },
+          { padding: [50, 50], maxZoom: 19 },
         );
       }
     }
@@ -171,7 +171,7 @@ export default function CrewMap({ members, meId, ownPosition, now }: Props) {
     if (!map || points.length === 0) return;
     map.fitBounds(
       L.latLngBounds(points.map((point) => [point.lat, point.lng])),
-      { padding: [40, 40], maxZoom: 17 },
+      { padding: [50, 50], maxZoom: 19 },
     );
   }
 
