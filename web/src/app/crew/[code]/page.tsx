@@ -1,19 +1,11 @@
 "use client";
 
-import { use, useEffect, useRef, useState } from "react";
+import { use } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { useRouter } from "next/navigation";
-import {
-  CrewError,
-  rejoinCrew,
-  type Member,
-  type PositionEvent,
-} from "@/lib/crew";
+import { useCrew } from "@/hooks/useCrew";
 import { sanitizeCodeInput } from "@/lib/crewCode";
-import { distanceMeters, type GeoFix, type GeoPoint } from "@/lib/geo";
-import { clearSession, loadSession } from "@/lib/session";
-import { getSocket } from "@/lib/socket";
+import { useCopyCode } from "@/hooks/useCopyCode";
 
 const CrewMap = dynamic(() => import("@/components/CrewMap"), {
   ssr: false,
@@ -23,171 +15,22 @@ const CrewMap = dynamic(() => import("@/components/CrewMap"), {
 });
 
 const MAX_MEMBERS = 10;
-const MIN_SEND_GAP_MS = 2500;
-const MIN_MOVE_METERS = 3;
-const HEARTBEAT_MS = 10_000;
-
-type Status = "connecting" | "waking" | "ready" | "ended" | "error";
-type GeoStatus = "pending" | "granted" | "denied" | "unsupported";
 
 export default function CrewPage(props: PageProps<"/crew/[code]">) {
   const { code: rawCode } = use(props.params);
   const code = sanitizeCodeInput(rawCode);
 
-  const router = useRouter();
-  const [status, setStatus] = useState<Status>("connecting");
-  const [members, setMembers] = useState<Member[]>([]);
-  const [memberId] = useState(() => loadSession()?.memberId ?? null);
-  const [connected, setConnected] = useState(true);
-  const [copied, setCopied] = useState(false);
-  const [now, setNow] = useState(() => Date.now());
-  const [ownPosition, setOwnPosition] = useState<GeoFix | null>(null);
-  const [geoStatus, setGeoStatus] = useState<GeoStatus>(() =>
-    typeof navigator === "undefined" || "geolocation" in navigator
-      ? "pending"
-      : "unsupported",
-  );
-  const [geoRetry, setGeoRetry] = useState(0);
-  const sendStateRef = useRef<{ sentAt: number; sent: GeoPoint | null }>({
-    sentAt: 0,
-    sent: null,
-  });
-
-  useEffect(() => {
-    const session = loadSession();
-    if (!session || session.code !== code) {
-      router.replace(`/join?code=${code}`);
-      return;
-    }
-
-    const socket = getSocket();
-    let cancelled = false;
-
-    const onMembers = (list: Member[]) => setMembers(list);
-    const onPosition = (event: PositionEvent) =>
-      setMembers((prev) =>
-        prev.map((member) =>
-          member.id === event.memberId
-            ? {
-                ...member,
-                position: {
-                  lat: event.lat,
-                  lng: event.lng,
-                  accuracy: event.accuracy,
-                  at: event.at,
-                },
-              }
-            : member,
-        ),
-      );
-    const onClosed = () => {
-      clearSession();
-      setStatus("ended");
-    };
-    const onDisconnect = () => setConnected(false);
-
-    const rejoin = async () => {
-      try {
-        const result = await rejoinCrew(session);
-        if (cancelled) return;
-        setMembers(result.members);
-        setStatus("ready");
-        setConnected(true);
-      } catch (error) {
-        if (cancelled) return;
-        if (error instanceof CrewError && error.reason === "not_found") {
-          clearSession();
-          setStatus("ended");
-        } else if (
-          error instanceof CrewError &&
-          error.reason === "invalid_session"
-        ) {
-          clearSession();
-          router.replace(`/join?code=${code}`);
-        } else {
-          setStatus("error");
-        }
-      }
-    };
-
-    const wakeTimer = setTimeout(() => {
-      setStatus((current) => (current === "connecting" ? "waking" : current));
-    }, 4000);
-
-    socket.on("crew:members", onMembers);
-    socket.on("crew:position", onPosition);
-    socket.on("crew:closed", onClosed);
-    socket.on("disconnect", onDisconnect);
-    socket.on("connect", rejoin);
-    rejoin();
-
-    return () => {
-      cancelled = true;
-      clearTimeout(wakeTimer);
-      socket.off("crew:members", onMembers);
-      socket.off("crew:position", onPosition);
-      socket.off("crew:closed", onClosed);
-      socket.off("disconnect", onDisconnect);
-      socket.off("connect", rejoin);
-    };
-  }, [code, router]);
-
-  const geoActive = status === "ready" && geoStatus !== "unsupported";
-
-  useEffect(() => {
-    if (!geoActive) return;
-    const socket = getSocket();
-
-    const watchId = navigator.geolocation.watchPosition(
-      (fix) => {
-        const point: GeoFix = {
-          lat: fix.coords.latitude,
-          lng: fix.coords.longitude,
-          accuracy: Number.isFinite(fix.coords.accuracy)
-            ? Math.round(fix.coords.accuracy)
-            : null,
-        };
-        setGeoStatus("granted");
-        setOwnPosition(point);
-
-        const sendState = sendStateRef.current;
-        const nowMs = Date.now();
-        const sinceMs = nowMs - sendState.sentAt;
-        const movedM = sendState.sent
-          ? distanceMeters(sendState.sent, point)
-          : Infinity;
-        if (
-          (sinceMs >= MIN_SEND_GAP_MS && movedM >= MIN_MOVE_METERS) ||
-          sinceMs >= HEARTBEAT_MS
-        ) {
-          sendState.sentAt = nowMs;
-          sendState.sent = point;
-          socket.volatile.emit("position:update", point);
-        }
-      },
-      (error) => {
-        if (error.code === error.PERMISSION_DENIED) setGeoStatus("denied");
-      },
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 },
-    );
-
-    return () => navigator.geolocation.clearWatch(watchId);
-  }, [geoActive, geoRetry]);
-
-  useEffect(() => {
-    const ticker = setInterval(() => setNow(Date.now()), 5000);
-    return () => clearInterval(ticker);
-  }, []);
-
-  async function copyCode() {
-    try {
-      await navigator.clipboard.writeText(code);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      return;
-    }
-  }
+  const {
+    status,
+    members,
+    memberId,
+    connected,
+    ownPosition,
+    geoStatus,
+    retryGeo,
+    now,
+  } = useCrew(code);
+  const { copied, copyCode } = useCopyCode(code);
 
   if (status === "connecting" || status === "waking") {
     return (
@@ -282,10 +125,7 @@ export default function CrewPage(props: PageProps<"/crew/[code]">) {
         <div className="flex w-full max-w-xl items-center justify-between gap-3 rounded-xl bg-amber-100 px-4 py-2 text-sm font-medium text-amber-900 dark:bg-amber-950 dark:text-amber-200">
           <span>Location is off, your crew can&apos;t see you.</span>
           <button
-            onClick={() => {
-              setGeoStatus("pending");
-              setGeoRetry((n) => n + 1);
-            }}
+            onClick={retryGeo}
             className="shrink-0 rounded-full bg-amber-900 px-3 py-1 text-xs font-semibold text-amber-100 dark:bg-amber-200 dark:text-amber-950"
           >
             Retry
@@ -302,32 +142,63 @@ export default function CrewPage(props: PageProps<"/crew/[code]">) {
           {members.length} of {MAX_MEMBERS} members, {onlineCount} online
         </h2>
         <ul className="flex flex-col gap-2">
-          {sorted.map((member) => (
-            <li
-              key={member.id}
-              className="flex items-center gap-3 rounded-2xl bg-zinc-100 px-4 py-3 dark:bg-zinc-900"
-            >
-              <span className="text-2xl">{member.emoji}</span>
-              <span className="flex-1 truncate font-medium">
-                {member.name}
-                {member.id === memberId && (
-                  <span className="ml-2 text-sm font-normal text-zinc-500 dark:text-zinc-400">
-                    you
+          {sorted.map((member) => {
+            const isMe = member.id === memberId;
+            const navigable = !isMe && member.position !== null;
+            const row = (
+              <>
+                <span className="text-2xl">{member.emoji}</span>
+                <span className="flex-1 truncate font-medium">
+                  {member.name}
+                  {isMe && (
+                    <span className="ml-2 text-sm font-normal text-zinc-500 dark:text-zinc-400">
+                      you
+                    </span>
+                  )}
+                </span>
+                {member.online ? (
+                  <span className="flex items-center gap-1.5 text-sm text-green-600 dark:text-green-400">
+                    <span className="h-2 w-2 rounded-full bg-green-500" />
+                    online
+                  </span>
+                ) : (
+                  <span className="text-sm text-zinc-500 dark:text-zinc-400">
+                    {formatLastSeen(member.lastSeenAt, now)}
                   </span>
                 )}
-              </span>
-              {member.online ? (
-                <span className="flex items-center gap-1.5 text-sm text-green-600 dark:text-green-400">
-                  <span className="h-2 w-2 rounded-full bg-green-500" />
-                  online
-                </span>
-              ) : (
-                <span className="text-sm text-zinc-500 dark:text-zinc-400">
-                  {formatLastSeen(member.lastSeenAt, now)}
-                </span>
-              )}
-            </li>
-          ))}
+              </>
+            );
+            if (navigable) {
+              return (
+                <li key={member.id}>
+                  <Link
+                    href={`/crew/${code}/sonar/${member.id}`}
+                    className="flex items-center gap-3 rounded-2xl bg-zinc-100 px-4 py-3 transition-colors hover:bg-zinc-200 dark:bg-zinc-900 dark:hover:bg-zinc-800"
+                  >
+                    {row}
+                    <span className="text-xl" aria-hidden>
+                      🧭
+                    </span>
+                  </Link>
+                </li>
+              );
+            }
+            return (
+              <li
+                key={member.id}
+                className={`flex items-center gap-3 rounded-2xl bg-zinc-100 px-4 py-3 dark:bg-zinc-900 ${
+                  isMe ? "" : "opacity-60"
+                }`}
+              >
+                {row}
+                {!isMe && (
+                  <span className="text-xs text-zinc-400 dark:text-zinc-500">
+                    no location
+                  </span>
+                )}
+              </li>
+            );
+          })}
         </ul>
       </section>
     </main>
