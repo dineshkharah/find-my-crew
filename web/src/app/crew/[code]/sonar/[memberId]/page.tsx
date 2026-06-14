@@ -14,6 +14,7 @@ import {
   formatDistance,
   type GeoPoint,
 } from "@/lib/geo";
+import { loadPin } from "@/lib/pin";
 
 const CLOSE_METERS = 15;
 const AGING_MS = 15_000;
@@ -22,15 +23,29 @@ const SMOOTH_SAMPLES = 5;
 
 type Freshness = "fresh" | "aging" | "lost";
 
+type Target = {
+  emoji: string;
+  name: string;
+  lat: number;
+  lng: number;
+  at: number | null;
+};
+
 export default function SonarPage(
   props: PageProps<"/crew/[code]/sonar/[memberId]">,
 ) {
   const { code: rawCode, memberId: targetId } = use(props.params);
   const code = sanitizeCodeInput(rawCode);
+  const isPin = targetId === "pin";
 
-  const { status, members, ownPosition, now } = useCrew(code);
+  const { status, members, ownPosition, now, pin } = useCrew(code);
   const compass = useCompass();
-  useWakeLock(status === "ready");
+  useWakeLock(true);
+
+  const [storedPin] = useState(() =>
+    isPin && typeof window !== "undefined" ? loadPin(code) : null,
+  );
+  const livePin = pin ?? storedPin;
 
   const recentRef = useRef<GeoPoint[]>([]);
   const [me, setMe] = useState<GeoPoint | null>(null);
@@ -42,12 +57,30 @@ export default function SonarPage(
     setMe(averagePoint(buffer));
   }, [ownPosition]);
 
-  const target = members.find((member) => member.id === targetId) ?? null;
-  const targetPos = target?.position ?? null;
+  const member = members.find((m) => m.id === targetId) ?? null;
+  const target: Target | null = isPin
+    ? livePin
+      ? {
+          emoji: "📍",
+          name: "Meeting point",
+          lat: livePin.lat,
+          lng: livePin.lng,
+          at: null,
+        }
+      : null
+    : member && member.position
+      ? {
+          emoji: member.emoji,
+          name: member.name,
+          lat: member.position.lat,
+          lng: member.position.lng,
+          at: member.position.at,
+        }
+      : null;
 
-  const distance = me && targetPos ? distanceMeters(me, targetPos) : null;
-  const bearing = me && targetPos ? bearingDegrees(me, targetPos) : null;
-  const ageMs = targetPos ? Math.max(0, now - targetPos.at) : null;
+  const distance = me && target ? distanceMeters(me, target) : null;
+  const bearing = me && target ? bearingDegrees(me, target) : null;
+  const ageMs = target?.at != null ? Math.max(0, now - target.at) : null;
   const freshness: Freshness =
     ageMs === null || ageMs < AGING_MS
       ? "fresh"
@@ -83,7 +116,7 @@ export default function SonarPage(
     </Link>
   );
 
-  if (status === "ended") {
+  if (!isPin && status === "ended") {
     return (
       <main className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
         <h1 className="text-2xl font-bold tracking-tight">This crew has ended</h1>
@@ -97,7 +130,7 @@ export default function SonarPage(
     );
   }
 
-  if (status !== "ready") {
+  if (!isPin && status !== "ready") {
     return (
       <main className="flex flex-1 items-center justify-center px-6 text-center">
         <p className="text-lg text-zinc-500 dark:text-zinc-400">
@@ -107,32 +140,24 @@ export default function SonarPage(
     );
   }
 
-  if (!target) {
-    return (
-      <main className="relative flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
-        {back}
-        <p className="text-lg text-zinc-500 dark:text-zinc-400">
-          That crew member is not here.
-        </p>
-      </main>
-    );
-  }
-
   const heading = (
     <div className="flex flex-col items-center gap-1">
-      <span className="text-5xl">{target.emoji}</span>
-      <h1 className="text-2xl font-bold tracking-tight">{target.name}</h1>
+      <span className="text-5xl">{target ? target.emoji : "📍"}</span>
+      <h1 className="text-2xl font-bold tracking-tight">
+        {target ? target.name : isPin ? "Meeting point" : member?.name}
+      </h1>
     </div>
   );
 
-  if (!targetPos) {
+  if (!target) {
     return (
       <main className="relative flex flex-1 flex-col items-center justify-center gap-6 px-6 text-center">
         {back}
         {heading}
         <p className="max-w-xs text-zinc-500 dark:text-zinc-400">
-          No location for {target.name} yet. They need to open the app and allow
-          location.
+          {isPin
+            ? "No meeting point has been set yet."
+            : "No location for this person yet. They need to open the app and allow location."}
         </p>
       </main>
     );
