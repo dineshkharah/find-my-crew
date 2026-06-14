@@ -1,11 +1,11 @@
 "use client";
 
-import { use } from "react";
+import { use, useEffect, useState } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useCrew } from "@/hooks/useCrew";
-import { sanitizeCodeInput } from "@/lib/crewCode";
 import { useCopyCode } from "@/hooks/useCopyCode";
+import { sanitizeCodeInput } from "@/lib/crewCode";
 
 const CrewMap = dynamic(() => import("@/components/CrewMap"), {
   ssr: false,
@@ -15,6 +15,8 @@ const CrewMap = dynamic(() => import("@/components/CrewMap"), {
 });
 
 const MAX_MEMBERS = 10;
+
+type PendingPick = { lat: number; lng: number };
 
 export default function CrewPage(props: PageProps<"/crew/[code]">) {
   const { code: rawCode } = use(props.params);
@@ -29,8 +31,22 @@ export default function CrewPage(props: PageProps<"/crew/[code]">) {
     geoStatus,
     retryGeo,
     now,
+    pin,
+    pinNotice,
+    clearPinNotice,
+    setMeetingPoint,
   } = useCrew(code);
   const { copied, copyCode } = useCopyCode(code);
+
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const [confirmAt, setConfirmAt] = useState<PendingPick | null>(null);
+
+  useEffect(() => {
+    if (!pinNotice) return;
+    const timer = setTimeout(clearPinNotice, 4000);
+    return () => clearTimeout(timer);
+  }, [pinNotice, clearPinNotice]);
 
   if (status === "connecting" || status === "waking") {
     return (
@@ -91,11 +107,36 @@ export default function CrewPage(props: PageProps<"/crew/[code]">) {
   });
   const onlineCount = members.filter((member) => member.online).length;
 
+  function useMyLocation() {
+    setMenuOpen(false);
+    if (!ownPosition) return;
+    if (pin) {
+      setConfirmAt({ lat: ownPosition.lat, lng: ownPosition.lng });
+    } else {
+      setMeetingPoint(ownPosition.lat, ownPosition.lng);
+    }
+  }
+
+  function startPicking() {
+    setMenuOpen(false);
+    setPicking(true);
+  }
+
+  function confirmPin() {
+    if (confirmAt) setMeetingPoint(confirmAt.lat, confirmAt.lng);
+    setConfirmAt(null);
+  }
+
   return (
     <main className="flex flex-1 flex-col items-center gap-5 px-4 py-6">
       {!connected && (
         <div className="w-full max-w-xl rounded-xl bg-amber-100 px-4 py-2 text-center text-sm font-medium text-amber-900 dark:bg-amber-950 dark:text-amber-200">
           Reconnecting...
+        </div>
+      )}
+      {pinNotice && (
+        <div className="w-full max-w-xl rounded-xl bg-blue-100 px-4 py-2 text-center text-sm font-medium text-blue-900 dark:bg-blue-950 dark:text-blue-200">
+          {pinNotice}
         </div>
       )}
       <header className="flex flex-col items-center gap-1 text-center">
@@ -113,14 +154,63 @@ export default function CrewPage(props: PageProps<"/crew/[code]">) {
           {copied ? "Copied!" : "Tap the code to copy and share it"}
         </p>
       </header>
+
       <div className="relative h-[45dvh] w-full max-w-xl overflow-hidden rounded-2xl border border-zinc-200 dark:border-zinc-800">
         <CrewMap
           members={members}
           meId={memberId}
           ownPosition={ownPosition}
           now={now}
+          pin={pin}
+          picking={picking}
+          onPickLocation={(lat, lng) => {
+            setPicking(false);
+            setConfirmAt({ lat, lng });
+          }}
         />
+        {picking && (
+          <div className="absolute left-1/2 top-3 z-[1000] -translate-x-1/2 rounded-full bg-zinc-900/90 px-4 py-2 text-sm font-medium text-white">
+            Tap the spot for the meeting point
+          </div>
+        )}
       </div>
+
+      <div className="flex w-full max-w-xl flex-wrap items-center justify-center gap-3">
+        <div className="relative">
+          <button
+            onClick={() => setMenuOpen((open) => !open)}
+            className="flex h-11 items-center justify-center rounded-full border border-zinc-300 px-5 text-sm font-semibold transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-900"
+          >
+            📍 {pin ? "Move meeting point" : "Set meeting point"}
+          </button>
+          {menuOpen && (
+            <div className="absolute left-1/2 top-12 z-[1000] flex w-56 -translate-x-1/2 flex-col overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-lg dark:border-zinc-800 dark:bg-zinc-950">
+              <button
+                onClick={useMyLocation}
+                disabled={!ownPosition}
+                className="px-4 py-3 text-left text-sm hover:bg-zinc-100 disabled:opacity-40 dark:hover:bg-zinc-900"
+              >
+                Use my current location
+              </button>
+              <button
+                onClick={startPicking}
+                className="border-t border-zinc-200 px-4 py-3 text-left text-sm hover:bg-zinc-100 dark:border-zinc-800 dark:hover:bg-zinc-900"
+              >
+                Pick on the map
+              </button>
+            </div>
+          )}
+        </div>
+        {pin && (
+          <Link
+            href={`/crew/${code}/sonar/pin`}
+            className="flex h-11 items-center justify-center rounded-full bg-foreground px-5 text-sm font-semibold text-background"
+          >
+            🧭 Head to meeting point
+          </Link>
+        )}
+      </div>
+
       {geoStatus === "denied" && (
         <div className="flex w-full max-w-xl items-center justify-between gap-3 rounded-xl bg-amber-100 px-4 py-2 text-sm font-medium text-amber-900 dark:bg-amber-950 dark:text-amber-200">
           <span>Location is off, your crew can&apos;t see you.</span>
@@ -137,6 +227,7 @@ export default function CrewPage(props: PageProps<"/crew/[code]">) {
           Waiting for your location...
         </p>
       )}
+
       <section className="flex w-full max-w-xl flex-col gap-3">
         <h2 className="text-sm font-medium text-zinc-500 dark:text-zinc-400">
           {members.length} of {MAX_MEMBERS} members, {onlineCount} online
@@ -201,6 +292,35 @@ export default function CrewPage(props: PageProps<"/crew/[code]">) {
           })}
         </ul>
       </section>
+
+      {confirmAt && (
+        <div className="fixed inset-0 z-[2000] flex items-end justify-center bg-black/40 p-4 sm:items-center">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-6 dark:bg-zinc-950">
+            <h3 className="text-lg font-bold">
+              {pin ? "Replace the meeting point?" : "Set the meeting point here?"}
+            </h3>
+            <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
+              {pin
+                ? `This replaces the spot set by ${pin.setByEmoji} ${pin.setByName} ${formatAgo(pin.at, now)}.`
+                : "Everyone in the crew will see this spot and can head to it."}
+            </p>
+            <div className="mt-5 flex gap-3">
+              <button
+                onClick={() => setConfirmAt(null)}
+                className="flex h-11 flex-1 items-center justify-center rounded-full border border-zinc-300 font-semibold dark:border-zinc-700"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmPin}
+                className="flex h-11 flex-1 items-center justify-center rounded-full bg-foreground font-semibold text-background"
+              >
+                {pin ? "Replace" : "Set it"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
@@ -214,4 +334,13 @@ function formatLastSeen(lastSeenAt: number | null, now: number): string {
   if (minutes < 60) return `last seen ${minutes} min ago`;
   const hours = Math.round(minutes / 60);
   return `last seen ${hours} h ago`;
+}
+
+function formatAgo(at: number, now: number): string {
+  const seconds = Math.max(0, Math.round((now - at) / 1000));
+  if (seconds < 60) return "just now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  return `${hours} h ago`;
 }

@@ -5,6 +5,7 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import type { Member } from "@/lib/crew";
 import type { GeoFix } from "@/lib/geo";
+import type { MeetingPin } from "@/lib/pin";
 
 const STALE_AFTER_MS = 30_000;
 const GONE_AFTER_MS = 10 * 60_000;
@@ -14,6 +15,9 @@ type Props = {
   meId: string | null;
   ownPosition: GeoFix | null;
   now: number;
+  pin: MeetingPin | null;
+  picking: boolean;
+  onPickLocation: (lat: number, lng: number) => void;
 };
 
 type Point = {
@@ -37,7 +41,18 @@ function formatAge(ageMs: number): string {
   const seconds = Math.round(ageMs / 1000);
   if (seconds < 60) return `${seconds} s`;
   const minutes = Math.round(seconds / 60);
-  return `${minutes} min`;
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.round(minutes / 60);
+  return `${hours} h`;
+}
+
+function pinIcon(): L.DivIcon {
+  return L.divIcon({
+    className: "",
+    html: `<div style="font-size:32px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,0.4))">📍</div>`,
+    iconSize: [32, 32],
+    iconAnchor: [16, 32],
+  });
 }
 
 function markerIcon(point: Point): L.DivIcon {
@@ -58,11 +73,20 @@ function markerIcon(point: Point): L.DivIcon {
   });
 }
 
-export default function CrewMap({ members, meId, ownPosition, now }: Props) {
+export default function CrewMap({
+  members,
+  meId,
+  ownPosition,
+  now,
+  pin,
+  picking,
+  onPickLocation,
+}: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const markersRef = useRef(new Map<string, L.Marker>());
   const accuracyRef = useRef<L.Circle | null>(null);
+  const pinMarkerRef = useRef<L.Marker | null>(null);
   const pointsRef = useRef<Point[]>([]);
   const fittedRef = useRef(false);
 
@@ -82,6 +106,7 @@ export default function CrewMap({ members, meId, ownPosition, now }: Props) {
       mapRef.current = null;
       markers.clear();
       accuracyRef.current = null;
+      pinMarkerRef.current = null;
       fittedRef.current = false;
     };
   }, []);
@@ -164,6 +189,45 @@ export default function CrewMap({ members, meId, ownPosition, now }: Props) {
       }
     }
   }, [members, meId, ownPosition, now]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    if (!pin) {
+      pinMarkerRef.current?.remove();
+      pinMarkerRef.current = null;
+      return;
+    }
+
+    const popup = `<div style="text-align:center">Set by ${escapeHtml(
+      pin.setByEmoji,
+    )} ${escapeHtml(pin.setByName)}<br/>${formatAge(
+      Math.max(0, now - pin.at),
+    )} ago</div>`;
+
+    if (pinMarkerRef.current) {
+      pinMarkerRef.current.setLatLng([pin.lat, pin.lng]);
+    } else {
+      pinMarkerRef.current = L.marker([pin.lat, pin.lng], {
+        icon: pinIcon(),
+      }).addTo(map);
+    }
+    pinMarkerRef.current.bindPopup(popup);
+  }, [pin, now]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !picking) return;
+    const handler = (event: L.LeafletMouseEvent) =>
+      onPickLocation(event.latlng.lat, event.latlng.lng);
+    map.on("click", handler);
+    map.getContainer().style.cursor = "crosshair";
+    return () => {
+      map.off("click", handler);
+      map.getContainer().style.cursor = "";
+    };
+  }, [picking, onPickLocation]);
 
   function fitCrew() {
     const map = mapRef.current;
