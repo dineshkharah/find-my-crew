@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   CrewError,
@@ -8,26 +8,32 @@ import {
   type Member,
   type PositionEvent,
 } from "@/lib/crew";
-import { distanceMeters, type GeoFix, type GeoPoint } from "@/lib/geo";
+import { distanceMeters, type GeoPoint } from "@/lib/geo";
+import { loadPin, savePin, type MeetingPin } from "@/lib/pin";
 import { clearSession, loadSession } from "@/lib/session";
 import { getSocket } from "@/lib/socket";
+import { useGeolocation, type GeoStatus } from "./useGeolocation";
 
 const MIN_SEND_GAP_MS = 2500;
 const MIN_MOVE_METERS = 3;
 const HEARTBEAT_MS = 10_000;
 
 export type CrewStatus = "connecting" | "waking" | "ready" | "ended" | "error";
-export type GeoStatus = "pending" | "granted" | "denied" | "unsupported";
+export type { GeoStatus };
 
 export type UseCrew = {
   status: CrewStatus;
   members: Member[];
   memberId: string | null;
   connected: boolean;
-  ownPosition: GeoFix | null;
+  ownPosition: ReturnType<typeof useGeolocation>["position"];
   geoStatus: GeoStatus;
   retryGeo: () => void;
   now: number;
+  pin: MeetingPin | null;
+  pinNotice: string | null;
+  clearPinNotice: () => void;
+  setMeetingPoint: (lat: number, lng: number) => void;
 };
 
 export function useCrew(code: string): UseCrew {
@@ -37,13 +43,13 @@ export function useCrew(code: string): UseCrew {
   const [memberId] = useState(() => loadSession()?.memberId ?? null);
   const [connected, setConnected] = useState(true);
   const [now, setNow] = useState(() => Date.now());
-  const [ownPosition, setOwnPosition] = useState<GeoFix | null>(null);
-  const [geoStatus, setGeoStatus] = useState<GeoStatus>(() =>
-    typeof navigator === "undefined" || "geolocation" in navigator
-      ? "pending"
-      : "unsupported",
+  const [pin, setPin] = useState<MeetingPin | null>(() =>
+    typeof window === "undefined" ? null : loadPin(code),
   );
-  const [geoRetry, setGeoRetry] = useState(0);
+  const [pinNotice, setPinNotice] = useState<string | null>(null);
+  const prevPinRef = useRef<MeetingPin | null>(null);
+
+  const geo = useGeolocation(true);
   const sendStateRef = useRef<{ sentAt: number; sent: GeoPoint | null }>({
     sentAt: 0,
     sent: null,
@@ -76,6 +82,16 @@ export function useCrew(code: string): UseCrew {
             : member,
         ),
       );
+    const onPin = (next: MeetingPin) => {
+      const hadPin = prevPinRef.current !== null;
+      prevPinRef.current = next;
+      setPin(next);
+      savePin(code, next);
+      if (next.setByMemberId !== session.memberId) {
+        const verb = hadPin ? "moved" : "set";
+        setPinNotice(`${next.setByEmoji} ${next.setByName} ${verb} the meeting point`);
+      }
+    };
     const onClosed = () => {
       clearSession();
       setStatus("ended");
@@ -87,6 +103,11 @@ export function useCrew(code: string): UseCrew {
         const result = await rejoinCrew(session);
         if (cancelled) return;
         setMembers(result.members);
+        if (result.pin) {
+          prevPinRef.current = result.pin;
+          setPin(result.pin);
+          savePin(code, result.pin);
+        }
         setStatus("ready");
         setConnected(true);
       } catch (error) {
@@ -112,6 +133,7 @@ export function useCrew(code: string): UseCrew {
 
     socket.on("crew:members", onMembers);
     socket.on("crew:position", onPosition);
+    socket.on("crew:pin", onPin);
     socket.on("crew:closed", onClosed);
     socket.on("disconnect", onDisconnect);
     socket.on("connect", rejoin);
@@ -122,62 +144,42 @@ export function useCrew(code: string): UseCrew {
       clearTimeout(wakeTimer);
       socket.off("crew:members", onMembers);
       socket.off("crew:position", onPosition);
+      socket.off("crew:pin", onPin);
       socket.off("crew:closed", onClosed);
       socket.off("disconnect", onDisconnect);
       socket.off("connect", rejoin);
     };
   }, [code, router]);
 
-  const geoActive = status === "ready" && geoStatus !== "unsupported";
-
   useEffect(() => {
-    if (!geoActive) return;
+    if (status !== "ready" || !geo.position) return;
     const socket = getSocket();
-
-    const watchId = navigator.geolocation.watchPosition(
-      (fix) => {
-        const point: GeoFix = {
-          lat: fix.coords.latitude,
-          lng: fix.coords.longitude,
-          accuracy: Number.isFinite(fix.coords.accuracy)
-            ? Math.round(fix.coords.accuracy)
-            : null,
-        };
-        setGeoStatus("granted");
-        setOwnPosition(point);
-
-        const sendState = sendStateRef.current;
-        const nowMs = Date.now();
-        const sinceMs = nowMs - sendState.sentAt;
-        const movedM = sendState.sent
-          ? distanceMeters(sendState.sent, point)
-          : Infinity;
-        if (
-          (sinceMs >= MIN_SEND_GAP_MS && movedM >= MIN_MOVE_METERS) ||
-          sinceMs >= HEARTBEAT_MS
-        ) {
-          sendState.sentAt = nowMs;
-          sendState.sent = point;
-          socket.volatile.emit("position:update", point);
-        }
-      },
-      (error) => {
-        if (error.code === error.PERMISSION_DENIED) setGeoStatus("denied");
-      },
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 },
-    );
-
-    return () => navigator.geolocation.clearWatch(watchId);
-  }, [geoActive, geoRetry]);
+    const point = geo.position;
+    const sendState = sendStateRef.current;
+    const nowMs = Date.now();
+    const sinceMs = nowMs - sendState.sentAt;
+    const movedM = sendState.sent
+      ? distanceMeters(sendState.sent, point)
+      : Infinity;
+    if (
+      (sinceMs >= MIN_SEND_GAP_MS && movedM >= MIN_MOVE_METERS) ||
+      sinceMs >= HEARTBEAT_MS
+    ) {
+      sendState.sentAt = nowMs;
+      sendState.sent = point;
+      socket.volatile.emit("position:update", point);
+    }
+  }, [status, geo.position]);
 
   useEffect(() => {
     const ticker = setInterval(() => setNow(Date.now()), 5000);
     return () => clearInterval(ticker);
   }, []);
 
-  function retryGeo() {
-    setGeoStatus("pending");
-    setGeoRetry((n) => n + 1);
+  const clearPinNotice = useCallback(() => setPinNotice(null), []);
+
+  function setMeetingPoint(lat: number, lng: number) {
+    getSocket().emit("pin:set", { lat, lng });
   }
 
   return {
@@ -185,9 +187,13 @@ export function useCrew(code: string): UseCrew {
     members,
     memberId,
     connected,
-    ownPosition,
-    geoStatus,
-    retryGeo,
+    ownPosition: geo.position,
+    geoStatus: geo.status,
+    retryGeo: geo.retry,
     now,
+    pin,
+    pinNotice,
+    clearPinNotice,
+    setMeetingPoint,
   };
 }
