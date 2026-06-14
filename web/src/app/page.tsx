@@ -1,8 +1,9 @@
 import Link from "next/link";
+import InstallHint from "@/components/InstallHint";
 
 export default function Home() {
   return (
-    <main className="flex flex-1 flex-col items-center justify-center gap-12 px-6 text-center">
+    <main className="flex flex-1 flex-col items-center justify-center gap-12 px-6 py-10 text-center">
       <div className="flex flex-col items-center gap-3">
         <span className="text-6xl" aria-hidden>
           🧭
@@ -27,6 +28,7 @@ export default function Home() {
           Join a crew
         </Link>
       </div>
+      <InstallHint />
     </main>
   );
 }
