@@ -1,5 +1,6 @@
 import { getSocket } from "./socket";
 import type { Identity } from "./identity";
+import type { MeetingPin } from "./pin";
 import type { CrewSession } from "./session";
 
 export type MemberPosition = {
@@ -49,6 +50,7 @@ type JoinResult = {
   memberId: string;
   token: string;
   members: Member[];
+  pin: MeetingPin | null;
 };
 
 export function createCrew(identity: Identity): Promise<JoinResult> {
@@ -61,6 +63,9 @@ export function joinCrew(code: string, identity: Identity): Promise<JoinResult> 
 
 export function rejoinCrew(
   session: CrewSession,
-): Promise<{ code: string; members: Member[] }> {
-  return call<{ code: string; members: Member[] }>("crew:rejoin", session);
+): Promise<{ code: string; members: Member[]; pin: MeetingPin | null }> {
+  return call<{ code: string; members: Member[]; pin: MeetingPin | null }>(
+    "crew:rejoin",
+    session,
+  );
 }
