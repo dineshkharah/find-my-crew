@@ -112,6 +112,7 @@ io.on("connection", (socket) => {
       createdAt: Date.now(),
       lastEmptyAt: null,
       members: new Map(),
+      pin: null,
     };
     crews.set(code, crew);
     const member = addMember(crew, socket, identity);
@@ -122,6 +123,7 @@ io.on("connection", (socket) => {
       memberId: member.id,
       token: member.token,
       members: membersPayload(crew),
+      pin: crew.pin,
     });
   });
 
@@ -147,6 +149,7 @@ io.on("connection", (socket) => {
       memberId: member.id,
       token: member.token,
       members: membersPayload(crew),
+      pin: crew.pin,
     });
     broadcastMembers(crew);
   });
@@ -165,7 +168,7 @@ io.on("connection", (socket) => {
     }
 
     attach(socket, crew, member);
-    ack({ ok: true, code, members: membersPayload(crew) });
+    ack({ ok: true, code, members: membersPayload(crew), pin: crew.pin });
     broadcastMembers(crew);
   });
 
@@ -191,6 +194,27 @@ io.on("connection", (socket) => {
         memberId: member.id,
         ...member.position,
       });
+  });
+
+  socket.on("pin:set", (payload) => {
+    const crew = crews.get(socket.data.crewCode);
+    const member = crew?.members.get(socket.data.memberId);
+    if (!crew || !member) return;
+
+    const lat = Number(payload?.lat);
+    const lng = Number(payload?.lng);
+    if (!Number.isFinite(lat) || lat < -90 || lat > 90) return;
+    if (!Number.isFinite(lng) || lng < -180 || lng > 180) return;
+
+    crew.pin = {
+      lat,
+      lng,
+      setByName: member.name,
+      setByEmoji: member.emoji,
+      setByMemberId: member.id,
+      at: Date.now(),
+    };
+    io.to(crew.code).emit("crew:pin", crew.pin);
   });
 
   socket.on("disconnect", () => {

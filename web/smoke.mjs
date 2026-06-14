@@ -103,6 +103,29 @@ const invalidOutcome = await new Promise((resolve) => {
 });
 check("invalid position is ignored", invalidOutcome === "ignored");
 
+const aSawPin = new Promise((r) => a.once("crew:pin", r));
+b2.emit("pin:set", { lat: 18.5208, lng: 73.857 });
+const pin = await aSawPin;
+check(
+  "pin set is broadcast with attribution",
+  pin.lat === 18.5208 &&
+    pin.lng === 73.857 &&
+    pin.setByMemberId === joined.memberId &&
+    pin.setByName === "Priya" &&
+    typeof pin.at === "number",
+);
+
+const badPinOutcome = await new Promise((resolve) => {
+  const onPin = () => resolve("broadcast");
+  a.once("crew:pin", onPin);
+  b2.emit("pin:set", { lat: 999, lng: 73.857 });
+  setTimeout(() => {
+    a.off("crew:pin", onPin);
+    resolve("ignored");
+  }, 400);
+});
+check("invalid pin is ignored", badPinOutcome === "ignored");
+
 const extras = [];
 for (let i = 0; i < 8; i++) {
   const s = await connect();
@@ -112,6 +135,7 @@ for (let i = 0; i < 8; i++) {
   if (i === 0) {
     const seen = res.members.find((m) => m.id === joined.memberId);
     check("join snapshot includes stored positions", seen?.position?.lat === 18.5204);
+    check("join snapshot includes the meeting pin", res.pin?.lat === 18.5208);
   }
 }
 const eleventh = await connect();
